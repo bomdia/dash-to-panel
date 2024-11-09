@@ -20,14 +20,15 @@ import Clutter from 'gi://Clutter';
 import GLib from 'gi://GLib';
 import Graphene from 'gi://Graphene';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
+import * as Workspace from 'resource:///org/gnome/shell/ui/workspace.js';
 import Meta from 'gi://Meta';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 import St from 'gi://St';
 
 import * as Taskbar from './taskbar.js';
 import * as Utils from './utils.js';
-import {SETTINGS, DESKTOPSETTINGS} from './extension.js';
-import {gettext as _} from 'resource:///org/gnome/shell/extensions/extension.js';
+import { SETTINGS, DESKTOPSETTINGS } from './extension.js';
+import { gettext as _ } from 'resource:///org/gnome/shell/extensions/extension.js';
 
 //timeout intervals
 const ENSURE_VISIBLE_MS = 200;
@@ -56,11 +57,23 @@ let scaleFactor = 1;
 let animationTime = 0;
 let aspectRatio = {};
 
+function overviewOnlyForWindow (callback, window) {
+    const isOverviewWindow = Workspace.Workspace.prototype._isOverviewWindow;
+    Workspace.Workspace.prototype._isOverviewWindow = win => {
+        const activeWindow = window ?? global.display.focus_window;
+        return !activeWindow
+            ? isOverviewWindow(win)
+            : activeWindow.wm_class === win.wm_class;
+    };
+    callback ? callback() : Main.overview.toggle();
+    Workspace.Workspace.prototype._isOverviewWindow = isOverviewWindow;
+}
+
 export const PreviewMenu = GObject.registerClass({
     Signals: { 'open-state-changed': {} }
 }, class PreviewMenu extends St.Widget {
 
-    _init(panel) {
+    _init (panel) {
         super._init({ layout_manager: new Clutter.BinLayout() });
 
         let geom = panel.geom;
@@ -76,13 +89,13 @@ export const PreviewMenu = GObject.registerClass({
         this._translationDirection = (geom.position == St.Side.TOP || geom.position == St.Side.LEFT ? -1 : 1);
         this._translationOffset = Math.min(panel.dtpSize, MAX_TRANSLATION) * this._translationDirection;
 
-        this.menu = new St.Widget({ 
-            name: 'preview-menu', 
-            layout_manager: new Clutter.BinLayout(), 
-            reactive: true, 
+        this.menu = new St.Widget({
+            name: 'preview-menu',
+            layout_manager: new Clutter.BinLayout(),
+            reactive: true,
             track_hover: true,
-            x_expand: true, 
-            y_expand: true, 
+            x_expand: true,
+            y_expand: true,
             x_align: Clutter.ActorAlign[geom.position != St.Side.RIGHT ? 'START' : 'END'],
             y_align: Clutter.ActorAlign[geom.position != St.Side.BOTTOM ? 'START' : 'END']
         });
@@ -100,13 +113,13 @@ export const PreviewMenu = GObject.registerClass({
         this.add_child(this.menu);
     }
 
-    enable() {
+    enable () {
         this._timeoutsHandler = new Utils.TimeoutsHandler();
         this._signalsHandler = new Utils.GlobalSignalsHandler();
 
         Main.layoutManager.addChrome(this, { affectsInputRegion: false });
         Main.layoutManager.trackChrome(this.menu, { affectsInputRegion: true });
-        
+
         this._resetHiddenState();
         this._refreshGlobals();
         this._updateClip();
@@ -120,7 +133,7 @@ export const PreviewMenu = GObject.registerClass({
             ],
             [
                 this._scrollView,
-                'scroll-event', 
+                'scroll-event',
                 this._onScrollEvent.bind(this)
             ],
             [
@@ -153,7 +166,7 @@ export const PreviewMenu = GObject.registerClass({
         );
     }
 
-    disable() {
+    disable () {
         this._timeoutsHandler.destroy();
         this._signalsHandler.destroy();
 
@@ -163,7 +176,7 @@ export const PreviewMenu = GObject.registerClass({
         Main.layoutManager.removeChrome(this);
     }
 
-    requestOpen(appIcon) {
+    requestOpen (appIcon) {
         let timeout = SETTINGS.get_int('show-window-previews-timeout');
 
         if (this.opened) {
@@ -174,22 +187,24 @@ export const PreviewMenu = GObject.registerClass({
         this._timeoutsHandler.add([T1, timeout, () => this.open(appIcon)]);
     }
 
-    requestClose() {
+    requestClose () {
         this._endOpenCloseTimeouts();
         this._addCloseTimeout();
     }
 
-    open(appIcon, preventCloseWindow) {
+    open (appIcon, preventCloseWindow) {
         if (this.currentAppIcon != appIcon) {
+            overviewOnlyForWindow(() => Main.overview.show(), appIcon.window)
+            return
             this.currentAppIcon = appIcon;
             this.allowCloseWindow = !preventCloseWindow;
 
             if (!this.opened) {
                 this._refreshGlobals();
-                
+
                 this.set_height(this.clipHeight);
                 this.menu.show();
-                
+
                 setStyle(this.menu, 'background: ' + Utils.getrgbaColor(this.panel.dynamicTransparency.backgroundColorRgb, alphaBg));
             }
 
@@ -202,11 +217,13 @@ export const PreviewMenu = GObject.registerClass({
         }
     }
 
-    close(immediate) {
+    close (immediate) {
+        overviewOnlyForWindow(() => Main.overview.hide(), appIcon.window)
+        return
         this._endOpenCloseTimeouts();
         this._removeFocus();
         this._endPeek();
-        
+
         if (immediate) {
             Utils.stopAnimations(this.menu);
             this._resetHiddenState();
@@ -218,7 +235,7 @@ export const PreviewMenu = GObject.registerClass({
         this.currentAppIcon = null;
     }
 
-    update(appIcon, windows) {
+    update (appIcon, windows) {
         if (this.currentAppIcon == appIcon) {
             if (windows && !windows.length) {
                 this.close();
@@ -229,15 +246,15 @@ export const PreviewMenu = GObject.registerClass({
         }
     }
 
-    updatePosition() {
+    updatePosition () {
         this._updatePosition();
     }
 
-    focusNext() {
+    focusNext () {
         let previews = this._box.get_children();
         let currentIndex = this._focusedPreview ? previews.indexOf(this._focusedPreview) : -1;
         let nextIndex = currentIndex + 1;
-        
+
         nextIndex = previews[nextIndex] ? nextIndex : 0;
 
         if (previews[nextIndex]) {
@@ -249,13 +266,13 @@ export const PreviewMenu = GObject.registerClass({
         return nextIndex;
     }
 
-    activateFocused() {
+    activateFocused () {
         if (this.opened && this._focusedPreview) {
             this._focusedPreview.activate();
         }
     }
 
-    requestPeek(window) {
+    requestPeek (window) {
         this._timeoutsHandler.remove(T3);
 
         if (SETTINGS.get_boolean('peek-mode')) {
@@ -267,37 +284,37 @@ export const PreviewMenu = GObject.registerClass({
         }
     }
 
-    endPeekHere() {
+    endPeekHere () {
         this._endPeek(true);
     }
 
-    ensureVisible(preview) {
-        let [ , upper, pageSize] = this._getScrollAdjustmentValues();
-        
+    ensureVisible (preview) {
+        let [, upper, pageSize] = this._getScrollAdjustmentValues();
+
         if (upper > pageSize) {
             this._timeoutsHandler.add([
-                T4, 
-                ENSURE_VISIBLE_MS, 
+                T4,
+                ENSURE_VISIBLE_MS,
                 () => Utils.ensureActorVisibleInScrollView(this._scrollView, preview, MIN_DIMENSION, () => this._updateScrollFade())
             ]);
         }
     }
 
-    getCurrentAppIcon() {
+    getCurrentAppIcon () {
         return this.currentAppIcon;
     }
 
-    _setReactive(reactive) {
+    _setReactive (reactive) {
         this._box.get_children().forEach(c => c.reactive = reactive);
         this.menu.reactive = reactive;
     }
 
-    _setOpenedState(opened) {
+    _setOpenedState (opened) {
         this.opened = opened;
         this.emit('open-state-changed');
     }
 
-    _resetHiddenState() {
+    _resetHiddenState () {
         this.menu.hide();
         this.set_height(0);
         this._setOpenedState(false);
@@ -306,17 +323,17 @@ export const PreviewMenu = GObject.registerClass({
         this._box.get_children().forEach(c => c.destroy());
     }
 
-    _removeFocus() {
+    _removeFocus () {
         if (this._focusedPreview) {
             this._focusedPreview.setFocus(false);
             this._focusedPreview = null;
         }
     }
 
-    _mergeWindows(appIcon, windows) {
+    _mergeWindows (appIcon, windows) {
         windows = windows || (appIcon.window ? [appIcon.window] : appIcon.getAppIconInterestingWindows());
         windows.sort(Taskbar.sortWindowsCompareFunction);
-    
+
         let currentPreviews = this._box.get_children();
         let l = Math.max(windows.length, currentPreviews.length);
 
@@ -331,14 +348,14 @@ export const PreviewMenu = GObject.registerClass({
         }
     }
 
-    _addAndRemoveWindows(windows) {
+    _addAndRemoveWindows (windows) {
         let currentPreviews = this._box.get_children();
 
         windows.sort(Taskbar.sortWindowsCompareFunction);
 
         for (let i = 0, l = windows.length; i < l; ++i) {
             let currentIndex = Utils.findIndex(currentPreviews, c => c.window == windows[i]);
-            
+
             if (currentIndex < 0) {
                 this._addNewPreview(windows[i]);
             } else {
@@ -354,7 +371,7 @@ export const PreviewMenu = GObject.registerClass({
         currentPreviews.forEach(c => c.animateOut());
     }
 
-    _addNewPreview(window) {
+    _addNewPreview (window) {
         let preview = new Preview(this);
 
         this._box.add_child(preview);
@@ -362,11 +379,11 @@ export const PreviewMenu = GObject.registerClass({
         preview.assignWindow(window, this.opened);
     }
 
-    _addCloseTimeout() {
+    _addCloseTimeout () {
         this._timeoutsHandler.add([T2, SETTINGS.get_int('leave-timeout'), () => this.close()]);
     }
 
-    _onHoverChanged() {
+    _onHoverChanged () {
         this._endOpenCloseTimeouts();
 
         if (this.currentAppIcon && !this.menu.hover) {
@@ -375,10 +392,10 @@ export const PreviewMenu = GObject.registerClass({
         }
     }
 
-    _onScrollEvent(actor, event) {
+    _onScrollEvent (actor, event) {
         if (!event.is_pointer_emulated()) {
             let vOrh = this.isVertical ? 'v' : 'h';
-            let adjustment = this._scrollView['get_' + vOrh + 'scroll_bar']().get_adjustment(); 
+            let adjustment = this._scrollView['get_' + vOrh + 'scroll_bar']().get_adjustment();
             let increment = adjustment.step_increment;
             let delta = increment;
 
@@ -392,7 +409,7 @@ export const PreviewMenu = GObject.registerClass({
                     delta += dx * increment;
                     break;
             }
-            
+
             adjustment.set_value(adjustment.get_value() + delta);
             this._updateScrollFade();
         }
@@ -400,13 +417,13 @@ export const PreviewMenu = GObject.registerClass({
         return Clutter.EVENT_STOP;
     }
 
-    _endOpenCloseTimeouts() {
+    _endOpenCloseTimeouts () {
         this._timeoutsHandler.remove(T1);
         this._timeoutsHandler.remove(T2);
         this._timeoutsHandler.remove(T4);
     }
 
-    _refreshGlobals() {
+    _refreshGlobals () {
         isLeftButtons = Meta.prefs_get_button_layout().left_buttons.indexOf(Meta.ButtonFunction.CLOSE) >= 0;
         isTopHeader = SETTINGS.get_string('window-preview-title-position') == 'TOP';
         isManualStyling = SETTINGS.get_boolean('window-preview-manual-styling');
@@ -421,19 +438,19 @@ export const PreviewMenu = GObject.registerClass({
             size: SETTINGS.get_int('window-preview-aspect-ratio-y'),
             fixed: SETTINGS.get_boolean('window-preview-fixed-y')
         };
-        
-        alphaBg = SETTINGS.get_boolean('preview-use-custom-opacity') ? 
-                  SETTINGS.get_int('preview-custom-opacity') * .01 : 
-                  this.panel.dynamicTransparency.alpha;
+
+        alphaBg = SETTINGS.get_boolean('preview-use-custom-opacity') ?
+            SETTINGS.get_int('preview-custom-opacity') * .01 :
+            this.panel.dynamicTransparency.alpha;
     }
 
-    _updateClip() {
+    _updateClip () {
         let x, y, w;
         let geom = this.panel.getGeometry();
         let panelBoxTheme = this.panel.panelBox.get_theme_node();
-        let previewSize = (SETTINGS.get_int('window-preview-size') + 
-                           SETTINGS.get_int('window-preview-padding') * 2) * scaleFactor;
-        
+        let previewSize = (SETTINGS.get_int('window-preview-size') +
+            SETTINGS.get_int('window-preview-padding') * 2) * scaleFactor;
+
         if (this.isVertical) {
             w = previewSize;
             this.clipHeight = this.panel.monitor.height;
@@ -457,7 +474,7 @@ export const PreviewMenu = GObject.registerClass({
         Utils.setClip(this, x, y, w, this.clipHeight);
     }
 
-    _updatePosition() {
+    _updatePosition () {
         let sourceNode = this.currentAppIcon.get_theme_node();
         let sourceContentBox = sourceNode.get_content_box(this.currentAppIcon.get_allocation_box());
         let sourceAllocation = Utils.getTransformedAllocation(this.currentAppIcon);
@@ -468,7 +485,7 @@ export const PreviewMenu = GObject.registerClass({
         previewsWidth = Math.min(previewsWidth, this.panel.monitor.width);
         previewsHeight = Math.min(previewsHeight, this.panel.monitor.height);
         this._updateScrollFade(previewsWidth < this.panel.monitor.width && previewsHeight < this.panel.monitor.height);
-        
+
         if (this.isVertical) {
             y = sourceAllocation.y1 + appIconMargin - this.panel.monitor.y + (sourceContentBox.y2 - sourceContentBox.y1 - previewsHeight) * .5;
             y = Math.max(y, 0);
@@ -487,20 +504,20 @@ export const PreviewMenu = GObject.registerClass({
         }
     }
 
-    _updateScrollFade(remove) {
+    _updateScrollFade (remove) {
         let [value, upper, pageSize] = this._getScrollAdjustmentValues();
         let needsFade = Math.round(upper) > Math.round(pageSize);
         let fadeWidgets = this.menu.get_children().filter(c => c != this._scrollView);
-        
+
         if (!remove && needsFade) {
             if (!fadeWidgets.length) {
                 fadeWidgets.push(this._getFadeWidget());
                 fadeWidgets.push(this._getFadeWidget(true));
-    
+
                 this.menu.add_child(fadeWidgets[0]);
                 this.menu.add_child(fadeWidgets[1]);
             }
-            
+
             fadeWidgets[0].visible = value > 0;
             fadeWidgets[1].visible = value + pageSize < upper;
         } else if (remove || (!needsFade && fadeWidgets.length)) {
@@ -508,19 +525,19 @@ export const PreviewMenu = GObject.registerClass({
         }
     }
 
-    _getScrollAdjustmentValues() {
-        let [value , , upper, , , pageSize] = this._scrollView[(this.isVertical ? 'v' : 'h') + 'adjustment'].get_values();
+    _getScrollAdjustmentValues () {
+        let [value, , upper, , , pageSize] = this._scrollView[(this.isVertical ? 'v' : 'h') + 'adjustment'].get_values();
 
         return [value, upper, pageSize];
     }
 
-    _getFadeWidget(end) {
+    _getFadeWidget (end) {
         let x = 0, y = 0;
         let startBg = Utils.getrgbaColor(this.panel.dynamicTransparency.backgroundColorRgb, Math.min(alphaBg + .1, 1));
         let endBg = Utils.getrgbaColor(this.panel.dynamicTransparency.backgroundColorRgb, 0)
-        let fadeStyle = 'background-gradient-start:' + startBg + 
-                        'background-gradient-end:' + endBg + 
-                        'background-gradient-direction:' + this.panel.getOrientation();
+        let fadeStyle = 'background-gradient-start:' + startBg +
+            'background-gradient-end:' + endBg +
+            'background-gradient-direction:' + this.panel.getOrientation();
 
         if (this.isVertical) {
             y = end ? this.panel.monitor.height - FADE_SIZE : 0;
@@ -528,20 +545,20 @@ export const PreviewMenu = GObject.registerClass({
             x = end ? this.panel.monitor.width - FADE_SIZE : 0;
         }
 
-        let fadeWidget = new St.Widget({ 
-            reactive: false, 
-            pivot_point: new Graphene.Point({ x: .5, y: .5 }), 
+        let fadeWidget = new St.Widget({
+            reactive: false,
+            pivot_point: new Graphene.Point({ x: .5, y: .5 }),
             rotation_angle_z: end ? 180 : 0,
             style: fadeStyle,
             x: x, y: y,
-            width: this.isVertical ? this.width : FADE_SIZE, 
+            width: this.isVertical ? this.width : FADE_SIZE,
             height: this.isVertical ? FADE_SIZE : this.height
         });
 
         return fadeWidget;
     }
 
-    _getPreviewsSize() {
+    _getPreviewsSize () {
         let previewsWidth = 0;
         let previewsHeight = 0;
 
@@ -562,7 +579,7 @@ export const PreviewMenu = GObject.registerClass({
         return [previewsWidth, previewsHeight];
     }
 
-    _animateOpenOrClose(show, onComplete) {
+    _animateOpenOrClose (show, onComplete) {
         let isTranslationAnimation = this.menu[this._translationProp] != 0;
         let tweenOpts = {
             opacity: show ? 255 : 0,
@@ -571,8 +588,8 @@ export const PreviewMenu = GObject.registerClass({
                 if (isTranslationAnimation) {
                     Main.layoutManager._queueUpdateRegions();
                 }
-                
-                (onComplete || (() => {}))();
+
+                (onComplete || (() => { }))();
             }
         };
 
@@ -581,11 +598,11 @@ export const PreviewMenu = GObject.registerClass({
         Utils.animate(this.menu, getTweenOpts(tweenOpts));
     }
 
-    _peek(window) {
+    _peek (window) {
         let currentWorkspace = Utils.getCurrentWorkspace();
         let windowWorkspace = window.get_workspace();
         let focusWindow = () => this._focusMetaWindow(SETTINGS.get_int('peek-mode-opacity'), window);
-        
+
         this._restorePeekedWindowStack();
 
         if (this._peekedWindow && windowWorkspace != currentWorkspace) {
@@ -593,7 +610,7 @@ export const PreviewMenu = GObject.registerClass({
         }
 
         this._peekedWindow = window;
-        
+
         if (currentWorkspace != windowWorkspace) {
             this._switchToWorkspaceImmediate(windowWorkspace.index());
             this._timeoutsHandler.add([T3, 100, focusWindow]);
@@ -606,7 +623,7 @@ export const PreviewMenu = GObject.registerClass({
         }
     }
 
-    _endPeek(stayHere) {
+    _endPeek (stayHere) {
         this._timeoutsHandler.remove(T3);
 
         if (this._peekedWindow) {
@@ -624,11 +641,11 @@ export const PreviewMenu = GObject.registerClass({
         }
     }
 
-    _switchToWorkspaceImmediate(workspaceIndex) {
+    _switchToWorkspaceImmediate (workspaceIndex) {
         let workspace = Utils.getWorkspaceByIndex(workspaceIndex);
         let shouldAnimate = Main.wm._shouldAnimate;
 
-        if (!workspace || (!workspace.list_windows().length && 
+        if (!workspace || (!workspace.list_windows().length &&
             workspaceIndex < Utils.getWorkspaceCount() - 1)) {
             workspace = Utils.getCurrentWorkspace();
         }
@@ -638,7 +655,7 @@ export const PreviewMenu = GObject.registerClass({
         Main.wm._shouldAnimate = shouldAnimate;
     }
 
-    _focusMetaWindow(dimOpacity, window, immediate, ignoreFocus) {
+    _focusMetaWindow (dimOpacity, window, immediate, ignoreFocus) {
         window.get_workspace().list_windows().forEach(mw => {
             let wa = mw.get_compositor_private();
             let isFocused = !ignoreFocus && mw == window;
@@ -658,21 +675,21 @@ export const PreviewMenu = GObject.registerClass({
         });
     }
 
-    animateWindowOpacity(metaWindow, windowActor, opacity, immediate) {
+    animateWindowOpacity (metaWindow, windowActor, opacity, immediate) {
         windowActor = windowActor || metaWindow.get_compositor_private();
-        
+
         if (windowActor && !metaWindow.minimized) {
             let tweenOpts = getTweenOpts({ opacity });
 
             if (immediate && !metaWindow.is_on_all_workspaces()) {
                 tweenOpts.time = 0;
             }
-            
+
             Utils.animateWindowOpacity(windowActor, tweenOpts);
         }
     }
 
-    _restorePeekedWindowStack() {
+    _restorePeekedWindowStack () {
         let windowActor = this._peekedWindow ? this._peekedWindow.get_compositor_private() : null;
 
         if (windowActor) {
@@ -691,10 +708,10 @@ export const PreviewMenu = GObject.registerClass({
 export const Preview = GObject.registerClass({
 }, class Preview extends St.Widget {
 
-    _init(previewMenu) {
-        super._init({ 
-            style_class: 'preview-container', 
-            reactive: true, 
+    _init (previewMenu) {
+        super._init({
+            style_class: 'preview-container',
+            reactive: true,
             track_hover: true,
             layout_manager: new Clutter.BinLayout()
         });
@@ -714,42 +731,42 @@ export const Preview = GObject.registerClass({
 
         closeButton.add_child(new St.Icon({ icon_name: 'window-close-symbolic' }));
 
-        this._closeButtonBin = new St.Widget({ 
+        this._closeButtonBin = new St.Widget({
             style_class: 'preview-close-btn-container',
-            layout_manager: new Clutter.BinLayout(), 
-            opacity: 0, 
-            x_expand: true, y_expand: true, 
-            x_align: Clutter.ActorAlign[isLeftButtons ? 'START' : 'END'], 
+            layout_manager: new Clutter.BinLayout(),
+            opacity: 0,
+            x_expand: true, y_expand: true,
+            x_align: Clutter.ActorAlign[isLeftButtons ? 'START' : 'END'],
             y_align: Clutter.ActorAlign[isTopHeader ? 'START' : 'END']
         });
 
         this._closeButtonBin.add_child(closeButton);
 
-        this._previewBin = new St.Widget({ 
+        this._previewBin = new St.Widget({
             layout_manager: new Clutter.BinLayout(),
-            x_expand: true, y_expand: true, 
+            x_expand: true, y_expand: true,
             style: 'padding: ' + this._padding / scaleFactor + 'px;'
         });
 
         this._previewBin.set_size(previewBinWidth, previewBinHeight);
 
         box.add_child(this._previewBin);
-        
+
         if (headerHeight) {
             let headerBox = new St.Widget({
                 style_class: 'preview-header-box',
-                layout_manager: new Clutter.BoxLayout(), 
-                x_expand: true, 
+                layout_manager: new Clutter.BoxLayout(),
+                x_expand: true,
                 y_align: Clutter.ActorAlign[isTopHeader ? 'START' : 'END']
             });
-            
+
             setStyle(headerBox, this._getBackgroundColor(HEADER_COLOR_OFFSET, 1));
             this._workspaceIndicator = new St.Label({ y_align: Clutter.ActorAlign.CENTER });
             this._windowTitle = new St.Label({ y_align: Clutter.ActorAlign.CENTER, x_expand: true });
 
             this._iconBin = new St.Widget({ layout_manager: new Clutter.BinLayout() });
             this._iconBin.set_size(headerHeight, headerHeight);
-    
+
             headerBox.add_child(this._iconBin);
             headerBox.insert_child_at_index(this._workspaceIndicator, isLeftButtons ? 0 : 1);
             headerBox.insert_child_at_index(this._windowTitle, isLeftButtons ? 1 : 2);
@@ -766,7 +783,7 @@ export const Preview = GObject.registerClass({
         this.connect('destroy', () => this._onDestroy());
     }
 
-    adjustOnStage() {
+    adjustOnStage () {
         let closeButton = this._closeButtonBin.get_first_child();
         let closeButtonHeight = closeButton.height;
         let maxCloseButtonSize = MAX_CLOSE_BUTTON_SIZE * scaleFactor;
@@ -779,7 +796,7 @@ export const Preview = GObject.registerClass({
 
         if (!headerHeight) {
             closeButtonBorderRadius = 'border-radius: ';
-            
+
             if (isTopHeader) {
                 closeButtonBorderRadius += (isLeftButtons ? '0 0 4px 0;' : '0 0 0 4px;');
             } else {
@@ -795,12 +812,12 @@ export const Preview = GObject.registerClass({
         );
     }
 
-    assignWindow(window, animateSize) {
+    assignWindow (window, animateSize) {
         if (this.window != window) {
             let _assignWindowClone = () => {
                 if (window.get_compositor_private()) {
                     let cloneBin = this._getWindowCloneBin(window);
-                    
+
                     this._resizeClone(cloneBin, window);
                     this._addClone(cloneBin, animateSize);
                     this._previewMenu.updatePosition();
@@ -827,7 +844,7 @@ export const Preview = GObject.registerClass({
         this._updateHeader();
     }
 
-    animateOut() {
+    animateOut () {
         if (!this.animatingOut) {
             let tweenOpts = getTweenOpts({ opacity: 0, width: 0, height: 0, onComplete: () => this.destroy() });
 
@@ -838,7 +855,7 @@ export const Preview = GObject.registerClass({
         }
     }
 
-    getSize() {
+    getSize () {
         let [binWidth, binHeight] = this._getBinSize();
 
         binWidth = Math.max(binWidth, this.cloneWidth + this._padding * 2);
@@ -847,7 +864,7 @@ export const Preview = GObject.registerClass({
         return [binWidth, binHeight];
     }
 
-    setFocus(focused) {
+    setFocus (focused) {
         this._hideOrShowCloseButton(!focused);
         setStyle(this, this._getBackgroundColor(FOCUSED_COLOR_OFFSET, focused ? '-' : 0));
 
@@ -857,13 +874,13 @@ export const Preview = GObject.registerClass({
         }
     }
 
-    activate() {
+    activate () {
         this._previewMenu.endPeekHere();
         this._previewMenu.close();
         Main.activateWindow(this.window);
     }
 
-    _onDestroy() {
+    _onDestroy () {
         if (this._waitWindowId) {
             GLib.source_remove(this._waitWindowId);
             this._waitWindowId = 0;
@@ -872,11 +889,11 @@ export const Preview = GObject.registerClass({
         this._removeWindowSignals();
     }
 
-    _onHoverChanged() {
+    _onHoverChanged () {
         this.setFocus(this.hover);
     }
 
-    _onCloseBtnClick() {
+    _onCloseBtnClick () {
         this._hideOrShowCloseButton(true);
         this.reactive = false;
 
@@ -889,7 +906,7 @@ export const Preview = GObject.registerClass({
         this.window.delete(global.get_current_time());
     }
 
-    _onButtonReleaseEvent(e) {
+    _onButtonReleaseEvent (e) {
         switch (e.get_button()) {
             case 1: // Left click
                 this.activate();
@@ -907,7 +924,7 @@ export const Preview = GObject.registerClass({
         return Clutter.EVENT_STOP;
     }
 
-    _cancelAnimateOut() {
+    _cancelAnimateOut () {
         if (this.animatingOut) {
             this.animatingOut = false;
 
@@ -916,11 +933,11 @@ export const Preview = GObject.registerClass({
         }
     }
 
-    _showContextMenu(e) {
+    _showContextMenu (e) {
         let coords = e.get_coords();
-        let currentWorkspace = this._previewMenu.peekInitialWorkspaceIndex < 0 ? 
-                               Utils.getCurrentWorkspace() : 
-                               Utils.getWorkspaceByIndex(this._previewMenu.peekInitialWorkspaceIndex);
+        let currentWorkspace = this._previewMenu.peekInitialWorkspaceIndex < 0 ?
+            Utils.getCurrentWorkspace() :
+            Utils.getWorkspaceByIndex(this._previewMenu.peekInitialWorkspaceIndex);
 
         Main.wm._showWindowMenu(null, this.window, Meta.WindowMenuType.WM, {
             x: coords[0],
@@ -945,36 +962,36 @@ export const Preview = GObject.registerClass({
         }
     }
 
-    _removeWindowSignals() {
+    _removeWindowSignals () {
         if (this._titleWindowChangeId) {
             this.window.disconnect(this._titleWindowChangeId);
             this._titleWindowChangeId = 0;
         }
     }
 
-    _updateHeader() {
+    _updateHeader () {
         if (headerHeight) {
-            let iconTextureSize = SETTINGS.get_boolean('window-preview-use-custom-icon-size') ? 
-                                  SETTINGS.get_int('window-preview-custom-icon-size') : 
-                                  headerHeight / scaleFactor * .6;
+            let iconTextureSize = SETTINGS.get_boolean('window-preview-use-custom-icon-size') ?
+                SETTINGS.get_int('window-preview-custom-icon-size') :
+                headerHeight / scaleFactor * .6;
             let icon = this._previewMenu.getCurrentAppIcon().app.create_icon_texture(iconTextureSize);
             let workspaceIndex = '';
             let workspaceStyle = null;
             let fontScale = DESKTOPSETTINGS.get_double('text-scaling-factor');
             let commonTitleStyles = 'color: ' + SETTINGS.get_string('window-preview-title-font-color') + ';' +
-                                    'font-size: ' + SETTINGS.get_int('window-preview-title-font-size') * fontScale + 'px;' +
-                                    'font-weight: ' + SETTINGS.get_string('window-preview-title-font-weight') + ';';
-            
+                'font-size: ' + SETTINGS.get_int('window-preview-title-font-size') * fontScale + 'px;' +
+                'font-weight: ' + SETTINGS.get_string('window-preview-title-font-weight') + ';';
+
             this._iconBin.destroy_all_children();
             this._iconBin.add_child(icon);
 
             if (!SETTINGS.get_boolean('isolate-workspaces')) {
                 workspaceIndex = (this.window.get_workspace().index() + 1).toString();
-                workspaceStyle = 'margin: 0 4px 0 ' + (isLeftButtons ? Math.round((headerHeight - icon.width) * .5) + 'px' : '0') + '; padding: 0 4px;' +  
-                                 'border: 2px solid ' + this._getRgbaColor(FOCUSED_COLOR_OFFSET, .8) + 'border-radius: 2px;' + commonTitleStyles;
+                workspaceStyle = 'margin: 0 4px 0 ' + (isLeftButtons ? Math.round((headerHeight - icon.width) * .5) + 'px' : '0') + '; padding: 0 4px;' +
+                    'border: 2px solid ' + this._getRgbaColor(FOCUSED_COLOR_OFFSET, .8) + 'border-radius: 2px;' + commonTitleStyles;
             }
-    
-            this._workspaceIndicator.text = workspaceIndex; 
+
+            this._workspaceIndicator.text = workspaceIndex;
             setStyle(this._workspaceIndicator, workspaceStyle);
 
             this._titleWindowChangeId = this.window.connect('notify::title', () => this._updateWindowTitle());
@@ -983,22 +1000,22 @@ export const Preview = GObject.registerClass({
         }
     }
 
-    _updateWindowTitle() {
+    _updateWindowTitle () {
         this._windowTitle.text = this.window.title;
     }
 
-    _hideOrShowCloseButton(hide) {
+    _hideOrShowCloseButton (hide) {
         if (this._needsCloseButton) {
             Utils.animate(this._closeButtonBin, getTweenOpts({ opacity: hide ? 0 : 255 }));
         }
     }
 
-    _getBackgroundColor(offset, alpha) {
-        return 'background-color: ' + this._getRgbaColor(offset, alpha) + 
-               'transition-duration:' + this._previewMenu.panel.dynamicTransparency.animationDuration;
+    _getBackgroundColor (offset, alpha) {
+        return 'background-color: ' + this._getRgbaColor(offset, alpha) +
+            'transition-duration:' + this._previewMenu.panel.dynamicTransparency.animationDuration;
     }
 
-    _getRgbaColor(offset, alpha) {
+    _getRgbaColor (offset, alpha) {
         alpha = Math.abs(alpha);
 
         if (isNaN(alpha)) {
@@ -1008,10 +1025,10 @@ export const Preview = GObject.registerClass({
         return Utils.getrgbaColor(this._previewMenu.panel.dynamicTransparency.backgroundColorRgb, alpha, offset);
     }
 
-    _addClone(newCloneBin, animateSize) {
+    _addClone (newCloneBin, animateSize) {
         let currentClones = this._previewBin.get_children();
         let newCloneOpts = getTweenOpts({ opacity: 255 });
-        
+
         this._previewBin.add_child(newCloneBin);
 
         if (currentClones.length) {
@@ -1043,25 +1060,25 @@ export const Preview = GObject.registerClass({
 
         Utils.animate(newCloneBin, newCloneOpts);
     }
-    
-    _getWindowCloneBin(window) {
+
+    _getWindowCloneBin (window) {
         let frameRect = window.get_frame_rect();
         let bufferRect = window.get_buffer_rect();
         let clone = new Clutter.Clone({ source: window.get_compositor_private() });
-        let cloneBin = new St.Widget({ 
+        let cloneBin = new St.Widget({
             opacity: 0,
-            layout_manager: frameRect.width != bufferRect.width || 
-                            frameRect.height != bufferRect.height ?
-                            new WindowCloneLayout(frameRect, bufferRect) :
-                            new Clutter.BinLayout()
+            layout_manager: frameRect.width != bufferRect.width ||
+                frameRect.height != bufferRect.height ?
+                new WindowCloneLayout(frameRect, bufferRect) :
+                new Clutter.BinLayout()
         });
-        
+
         cloneBin.add_child(clone);
 
         return cloneBin;
     }
 
-    _getBinSize() {
+    _getBinSize () {
         let [fixedWidth, fixedHeight] = this._previewDimensions;
 
         return [
@@ -1070,18 +1087,18 @@ export const Preview = GObject.registerClass({
         ];
     }
 
-    _resizeClone(cloneBin, window) {
+    _resizeClone (cloneBin, window) {
         let frameRect = cloneBin.layout_manager.frameRect || window.get_frame_rect();
         let [fixedWidth, fixedHeight] = this._previewDimensions;
         let ratio = Math.min(fixedWidth / frameRect.width, fixedHeight / frameRect.height, 1);
         let cloneWidth = frameRect.width * ratio;
         let cloneHeight = frameRect.height * ratio;
-        
+
         let clonePaddingTB = cloneHeight < MIN_DIMENSION ? MIN_DIMENSION - cloneHeight : 0;
         let clonePaddingLR = cloneWidth < MIN_DIMENSION ? MIN_DIMENSION - cloneWidth : 0;
         let clonePaddingTop = clonePaddingTB * .5;
         let clonePaddingLeft = clonePaddingLR * .5;
-        
+
         this.cloneWidth = cloneWidth + clonePaddingLR * scaleFactor;
         this.cloneHeight = cloneHeight + clonePaddingTB * scaleFactor;
 
@@ -1092,7 +1109,7 @@ export const Preview = GObject.registerClass({
         cloneBin.get_first_child().set_size(cloneWidth, cloneHeight);
     }
 
-    _getPreviewDimensions() {
+    _getPreviewDimensions () {
         let size = SETTINGS.get_int('window-preview-size') * scaleFactor;
         let w, h;
 
@@ -1111,7 +1128,7 @@ export const Preview = GObject.registerClass({
 export const WindowCloneLayout = GObject.registerClass({
 }, class WindowCloneLayout extends Clutter.BinLayout {
 
-    _init(frameRect, bufferRect) {
+    _init (frameRect, bufferRect) {
         super._init();
 
         //the buffer_rect contains the transparent padding that must be removed
@@ -1119,16 +1136,16 @@ export const WindowCloneLayout = GObject.registerClass({
         this.bufferRect = bufferRect;
     }
 
-    vfunc_allocate(actor, box) {
+    vfunc_allocate (actor, box) {
         let [width, height] = box.get_size();
 
         box.set_origin(
-            (this.bufferRect.x - this.frameRect.x) * this.ratio + this.padding[0], 
+            (this.bufferRect.x - this.frameRect.x) * this.ratio + this.padding[0],
             (this.bufferRect.y - this.frameRect.y) * this.ratio + this.padding[1]
         );
 
         box.set_size(
-            width + (this.bufferRect.width - this.frameRect.width) * this.ratio, 
+            width + (this.bufferRect.width - this.frameRect.width) * this.ratio,
             height + (this.bufferRect.height - this.frameRect.height) * this.ratio
         );
 
@@ -1136,13 +1153,13 @@ export const WindowCloneLayout = GObject.registerClass({
     }
 });
 
-export function setStyle(actor, style) {
+export function setStyle (actor, style) {
     if (!isManualStyling) {
         actor.set_style(style);
     }
 }
 
-export function getTweenOpts(opts) {
+export function getTweenOpts (opts) {
     let defaults = {
         time: animationTime,
         transition: 'easeInOutQuad'
